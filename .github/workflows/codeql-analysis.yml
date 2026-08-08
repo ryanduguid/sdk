@@ -1,22 +1,25 @@
-# For most projects, this workflow file will not need changing; you simply need
-# to commit it to your repository.
-#
-# You may wish to alter this file to override the set of languages analyzed,
-# or to provide custom queries or build logic.
+# Analyze GitHub Actions workflows and the maintained Python sources.
+# .github/codeql-config.yml carries only a paths-ignore for the
+# Jinja-templated cookiecutter sources, which CodeQL cannot parse.
+# With no paths allow-list, default Python extraction covers everything
+# else — including packages/, which was previously missing from analysis —
+# and the actions extractor's default workflow-file include is preserved
+# (a user paths allow-list would override it and extract zero workflows).
 #
 name: "CodeQL"
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "main"
       - "v*"
     paths:
-      - .github/workflows/codeql-analysis.yml
+      - '.github/**'
       - '**.py'  # Any Python file
   pull_request:
     paths:
-      - .github/workflows/codeql-analysis.yml
+      - '.github/**'
       - '**.py'  # Any Python file
   schedule:
     - cron: '37 10 * * 5'
@@ -37,8 +40,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'python' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
+        language: [ 'actions', 'python' ]
+        # CodeQL supports Actions plus compiled and interpreted source languages.
         # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
 
     steps:
