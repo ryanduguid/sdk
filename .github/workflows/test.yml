@@ -146,7 +146,7 @@ jobs:
   tests-external:
     name: External Tests
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.head.repo.fork }}
+    if: ${{ github.repository == 'meltano/sdk' && !github.event.pull_request.head.repo.fork }}
     env:
       NOXSESSION: test-external
       TAP_GITLAB_AUTH_TOKEN: ${{ secrets.SAMPLE_TAP_GITLAB_AUTH_TOKEN }}
@@ -222,6 +222,7 @@ jobs:
         nox -r --no-install -- xml
 
     - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      if: ${{ github.repository == 'meltano/sdk' }}
       with:
         fail_ci_if_error: true
         flags: ${{ matrix.flag }}
