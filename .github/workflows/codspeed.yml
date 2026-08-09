@@ -37,6 +37,7 @@ permissions: {}
 jobs:
   benchmarks:
     name: Run benchmarks
+    if: github.repository == 'meltano/sdk'
     runs-on: ubuntu-latest
     permissions:
       contents: read
