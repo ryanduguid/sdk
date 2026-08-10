@@ -1,6 +1,5 @@
 # HTTP cache
 http_cache.sqlite
-.http_cache/
 
 # Local Poetry configuration file
 
