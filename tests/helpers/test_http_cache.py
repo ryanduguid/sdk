@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import weakref
 from pathlib import Path
 
 import pytest
@@ -113,6 +115,19 @@ def test_default_cache_is_outside_current_directory(
     with SafeCachedSession() as session:
         assert not Path(session.cache.cache_dir).is_relative_to(tmp_path)
     assert not (tmp_path / ".http_cache").exists()
+
+
+def test_unclosed_default_cache_is_closed_before_temporary_cleanup() -> None:
+    session = SafeCachedSession()
+    assert session._temporary_cache is not None
+    cache_directory = Path(session._temporary_cache.name)
+    reference = weakref.ref(session)
+
+    del session
+    gc.collect()
+
+    assert reference() is None
+    assert not cache_directory.exists()
 
 
 @pytest.mark.parametrize(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 import typing as t
+import weakref
 from tempfile import TemporaryDirectory
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -24,6 +25,7 @@ if t.TYPE_CHECKING:
     from pathlib import Path
 
     from requests import PreparedRequest, Response
+    from requests_cache.backends import BaseCache
 
 _HeaderValue = t.TypeVar("_HeaderValue")
 
@@ -183,6 +185,17 @@ def sanitise_response_for_cache(
     return response
 
 
+def _close_temporary_cache(
+    cache: BaseCache,
+    temporary_cache: TemporaryDirectory[str],
+) -> None:
+    """Close a filesystem backend before its temporary directory is removed."""
+    try:
+        cache.close()
+    finally:
+        temporary_cache.cleanup()
+
+
 class SafeCachedSession(CachedSession):
     """A cache session whose default filesystem lives outside the repository."""
 
@@ -194,6 +207,7 @@ class SafeCachedSession(CachedSession):
     ) -> None:
         """Initialise a sanitising session with a temporary default cache path."""
         self._temporary_cache: TemporaryDirectory[str] | None = None
+        self._temporary_cache_finalizer: weakref.finalize | None = None
         if cache_path is None:
             self._temporary_cache = TemporaryDirectory(prefix="singer-sdk-http-cache-")
             cache_path = self._temporary_cache.name
@@ -206,6 +220,17 @@ class SafeCachedSession(CachedSession):
             match_headers=True,
         )
         self.hooks["response"].append(sanitise_response_for_cache)
+        if self._temporary_cache is not None:
+            # TemporaryDirectory's own finalizer can run while the filesystem
+            # backend still holds redirects.sqlite open. Windows then raises
+            # WinError 32. Retain the backend and directory, but not the
+            # session itself, and close them in the required order at GC.
+            self._temporary_cache_finalizer = weakref.finalize(
+                self,
+                _close_temporary_cache,
+                self.cache,
+                self._temporary_cache,
+            )
 
     @override
     def close(self) -> None:
@@ -216,3 +241,6 @@ class SafeCachedSession(CachedSession):
             if self._temporary_cache is not None:
                 self._temporary_cache.cleanup()
                 self._temporary_cache = None
+                if self._temporary_cache_finalizer is not None:
+                    self._temporary_cache_finalizer.detach()
+                    self._temporary_cache_finalizer = None
