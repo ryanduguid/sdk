@@ -186,12 +186,14 @@ def sanitise_response_for_cache(
 
 
 def _close_temporary_cache(
-    cache: BaseCache,
+    opened_backend: list[BaseCache | None],
     temporary_cache: TemporaryDirectory[str],
 ) -> None:
-    """Close a filesystem backend before its temporary directory is removed."""
+    """Close a filesystem backend, if one opened, before removing its directory."""
+    backend = opened_backend[0]
     try:
-        cache.close()
+        if backend is not None:
+            backend.close()
     finally:
         temporary_cache.cleanup()
 
@@ -208,29 +210,36 @@ class SafeCachedSession(CachedSession):
         """Initialise a sanitising session with a temporary default cache path."""
         self._temporary_cache: TemporaryDirectory[str] | None = None
         self._temporary_cache_finalizer: weakref.finalize | None = None
+        opened_backend: list[BaseCache | None] = [None]
         if cache_path is None:
             self._temporary_cache = TemporaryDirectory(prefix="singer-sdk-http-cache-")
             cache_path = self._temporary_cache.name
-        super().__init__(
-            cache_path,
-            backend="filesystem",
-            serializer="json",
-            allowable_methods=allowable_methods,
-            ignored_parameters=sorted(_SENSITIVE_HEADERS | _SENSITIVE_PARAMETERS),
-            match_headers=True,
-        )
-        self.hooks["response"].append(sanitise_response_for_cache)
-        if self._temporary_cache is not None:
             # TemporaryDirectory's own finalizer can run while the filesystem
             # backend still holds redirects.sqlite open. Windows then raises
             # WinError 32. Retain the backend and directory, but not the
             # session itself, and close them in the required order at GC.
+            #
+            # `init_backend()` opens that file inside `super().__init__()`, so the
+            # guard is registered before that call: an exception raised afterwards
+            # would otherwise leave the directory behind with nothing to close it.
             self._temporary_cache_finalizer = weakref.finalize(
                 self,
                 _close_temporary_cache,
-                self.cache,
+                opened_backend,
                 self._temporary_cache,
             )
+        try:
+            super().__init__(
+                cache_path,
+                backend="filesystem",
+                serializer="json",
+                allowable_methods=allowable_methods,
+                ignored_parameters=sorted(_SENSITIVE_HEADERS | _SENSITIVE_PARAMETERS),
+                match_headers=True,
+            )
+        finally:
+            opened_backend[0] = getattr(self, "cache", None)
+        self.hooks["response"].append(sanitise_response_for_cache)
 
     @override
     def close(self) -> None:

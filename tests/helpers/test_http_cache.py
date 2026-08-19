@@ -4,10 +4,14 @@ import gc
 import json
 import weakref
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import requests
+from requests_cache import CachedSession
+from requests_cache.backends import init_backend
 
+from singer_sdk.helpers import http_cache
 from singer_sdk.helpers.http_cache import (
     SafeCachedSession,
     _decode_text,
@@ -118,16 +122,70 @@ def test_default_cache_is_outside_current_directory(
 
 
 def test_unclosed_default_cache_is_closed_before_temporary_cleanup() -> None:
+    """The backend has to be closed *before* its directory is removed.
+
+    Only Windows refuses to unlink an open file, so asserting the directory is
+    gone proves nothing elsewhere: POSIX unlinks `redirects.sqlite` while it is
+    still open and `rmtree` succeeds either way. Observe the close instead.
+    """
     session = SafeCachedSession()
     assert session._temporary_cache is not None
     cache_directory = Path(session._temporary_cache.name)
+    order: list[str] = []
+    close_backend = session.cache.close
+    remove_directory = session._temporary_cache.cleanup
+
+    def record_close() -> None:
+        order.append("close")
+        close_backend()
+
+    def record_cleanup() -> None:
+        order.append("cleanup")
+        remove_directory()
+
+    session.cache.close = record_close
+    session._temporary_cache.cleanup = record_cleanup
     reference = weakref.ref(session)
 
     del session
     gc.collect()
 
     assert reference() is None
+    assert order == ["close", "cleanup"]
     assert not cache_directory.exists()
+
+
+def test_temporary_cache_is_guarded_before_the_backend_opens() -> None:
+    """A failure inside `CachedSession.__init__` must not leak the directory.
+
+    `init_backend()` opens `redirects.sqlite` first, so a guard registered only
+    once the constructor returns leaves a window where the file is open and
+    nothing will close it.
+    """
+    directories: list[Path] = []
+    real_temporary_directory = http_cache.TemporaryDirectory
+
+    def record_temporary_directory(*args, **kwargs):
+        temporary = real_temporary_directory(*args, **kwargs)
+        directories.append(Path(temporary.name))
+        return temporary
+
+    def explode(self, *args, **kwargs):
+        self.cache = init_backend(*args, **kwargs)
+        msg = "synthetic failure after the backend is open"
+        raise RuntimeError(msg)
+
+    with (
+        mock.patch.object(http_cache, "TemporaryDirectory", record_temporary_directory),
+        mock.patch.object(CachedSession, "__init__", explode),
+        pytest.raises(RuntimeError, match="synthetic failure"),
+    ):
+        SafeCachedSession()
+
+    gc.collect()
+
+    assert directories
+    assert not directories[0].exists()
 
 
 @pytest.mark.parametrize(
